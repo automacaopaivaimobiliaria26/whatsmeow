@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"google.golang.org/protobuf/proto"
 
@@ -75,6 +76,9 @@ func (vc WAVersionContainer) ProtoAppVersion() *waWa6.ClientPayload_UserAgent_Ap
 	}
 }
 
+// waVersionMu protects the WhatsApp version and shared client payload.
+var waVersionMu sync.RWMutex
+
 // waVersion is the WhatsApp web client version
 var waVersion = WAVersionContainer{2, 3000, 1042386815}
 
@@ -83,6 +87,8 @@ var waVersionHash = waVersion.Hash()
 
 // GetWAVersion gets the current WhatsApp web client version.
 func GetWAVersion() WAVersionContainer {
+	waVersionMu.RLock()
+	defer waVersionMu.RUnlock()
 	return waVersion
 }
 
@@ -94,9 +100,11 @@ func SetWAVersion(version WAVersionContainer) {
 	if version.IsZero() {
 		return
 	}
+	waVersionMu.Lock()
+	defer waVersionMu.Unlock()
 	waVersion = version
 	waVersionHash = version.Hash()
-	BaseClientPayload.UserAgent.AppVersion = waVersion.ProtoAppVersion()
+	BaseClientPayload.UserAgent.AppVersion = version.ProtoAppVersion()
 }
 
 var BaseClientPayload = &waWa6.ClientPayload{
@@ -157,6 +165,8 @@ var DeviceProps = &waCompanionReg.DeviceProps{
 }
 
 func SetOSInfo(name string, version [3]uint32) {
+	waVersionMu.Lock()
+	defer waVersionMu.Unlock()
 	DeviceProps.Os = &name
 	DeviceProps.Version.Primary = &version[0]
 	DeviceProps.Version.Secondary = &version[1]
@@ -179,7 +189,7 @@ func (device *Device) getRegistrationPayload() *waWa6.ClientPayload {
 		ESkeyID:     preKeyID[1:],
 		ESkeyVal:    device.SignedPreKey.Pub[:],
 		ESkeySig:    device.SignedPreKey.Signature[:],
-		BuildHash:   waVersionHash[:],
+		BuildHash:   append([]byte(nil), waVersionHash[:]...),
 		DeviceProps: deviceProps,
 	}
 	payload.Passive = proto.Bool(false)
@@ -201,6 +211,8 @@ func (device *Device) getLoginPayload() *waWa6.ClientPayload {
 }
 
 func (device *Device) GetClientPayload() *waWa6.ClientPayload {
+	waVersionMu.RLock()
+	defer waVersionMu.RUnlock()
 	if device.ID != nil {
 		if *device.ID == types.EmptyJID {
 			panic(fmt.Errorf("GetClientPayload called with empty JID"))
